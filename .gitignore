@@ -1,0 +1,10 @@
+bin
+obj
+.vs
+local.settings.json
+.python_packages
+__pycache__
+.venv
+*.user
+*.suo
+profile/
