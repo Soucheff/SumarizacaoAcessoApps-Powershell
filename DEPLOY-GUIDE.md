@@ -179,7 +179,136 @@ az functionapp config appsettings list `
   --resource-group $resourceGroup
 ```
 
-### Passo 8: Deploy do Código
+### Passo 8: Criar Data Collection Rule (DCR)
+
+A **DCR** define como coletar e estruturar os dados que sua Function App enviará para o Log Analytics.
+
+#### 8.1 Criar arquivo de configuração DCR
+
+Salve este JSON como `dcr-config.json`:
+
+```json
+{
+  "location": "East US",
+  "properties": {
+    "streamDeclarations": {
+      "Custom-AcessoApsLog": {
+        "columns": [
+          {
+            "name": "TimeGenerated",
+            "type": "datetime"
+          },
+          {
+            "name": "ExecutionId",
+            "type": "string"
+          },
+          {
+            "name": "FunctionName",
+            "type": "string"
+          },
+          {
+            "name": "LogLevel",
+            "type": "string"
+          },
+          {
+            "name": "Message",
+            "type": "string"
+          },
+          {
+            "name": "AppName",
+            "type": "string"
+          },
+          {
+            "name": "AccessCount",
+            "type": "int"
+          },
+          {
+            "name": "ExecutionTime",
+            "type": "real"
+          },
+          {
+            "name": "Status",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "dataSources": {
+      "logs": [
+        {
+          "name": "acessoAppsLogSource",
+          "streams": [
+            "Custom-AcessoApsLog"
+          ]
+        }
+      ]
+    },
+    "destinations": {
+      "logAnalytics": [
+        {
+          "name": "logAnalyticsWorkspace",
+          "workspaceResourceId": "/subscriptions/SEU-SUBSCRIPTION-ID/resourceGroups/seu-resource-group/providers/microsoft.operationalinsights/workspaces/seu-workspace"
+        }
+      ]
+    },
+    "dataFlows": [
+      {
+        "streams": [
+          "Custom-AcessoApsLog"
+        ],
+        "destinations": [
+          "logAnalyticsWorkspace"
+        ],
+        "transformKql": "source\n| project TimeGenerated, ExecutionId, FunctionName, LogLevel, Message, AppName, AccessCount=toint(AccessCount), ExecutionTime=todouble(ExecutionTime), Status\n| extend IsError = (LogLevel == \"Error\"), IsCritical = (LogLevel == \"Critical\")"
+      }
+    ]
+  }
+}
+```
+
+#### 8.2 Criar a DCR no Azure
+
+```powershell
+$dcrName = "SumarizacaoAcessoApps-DCR"
+$workspaceId = (az monitor log-analytics workspace list `
+  --resource-group $resourceGroup `
+  --query "[0].id" -o tsv)
+
+# Substituir variáveis no arquivo JSON
+$dcrConfig = Get-Content "dcr-config.json" | ConvertFrom-Json
+$dcrConfig.properties.destinations.logAnalytics[0].workspaceResourceId = $workspaceId
+$dcrConfig | ConvertTo-Json -Depth 10 | Set-Content "dcr-config-ready.json"
+
+# Criar a DCR
+az monitor data-collection rule create `
+  --resource-group $resourceGroup `
+  --name $dcrName `
+  --location $location `
+  --rule-file "dcr-config-ready.json"
+
+# Obter o Resource ID da DCR
+$dcrResourceId = az monitor data-collection rule show `
+  --resource-group $resourceGroup `
+  --name $dcrName `
+  --query id -o tsv
+
+Write-Host "✅ DCR criada: $dcrResourceId"
+```
+
+#### 8.3 Obter Endpoint HTTP da DCR
+
+```powershell
+# Listar regras de ingestão (endpoint para enviar dados)
+az monitor data-collection rule association list `
+  --resource-group $resourceGroup `
+  --output table
+
+# A URL para enviar dados será algo como:
+# https://seu-workspace.eastus-1.ingest.monitor.azure.com/dataCollectionRules/dcr-id/streams/Custom-AcessoApsLog?api-version=2023-01-01
+```
+
+### Passo 9: Deploy do Código
+
 
 ```powershell
 # Navegar para a pasta do projeto
@@ -192,8 +321,7 @@ func azure functionapp publish $functionAppName
 func azure functionapp publish $functionAppName --build remote
 ```
 
-### Passo 9: Verificar Deploy
-
+### Passo 10: Verificar Deploy
 ```powershell
 # Listar funções deployed
 az functionapp function list `
@@ -395,7 +523,64 @@ az role assignment create `
   --role "Storage Blob Data Contributor" `
   --scope $storageResourceId
 
-# 8. FAZER DEPLOY
+# 8. CRIAR DATA COLLECTION RULE (DCR)
+$dcrName = "SumarizacaoAcessoApps-DCR"
+$dcrPayload = @{
+  location = $location
+  properties = @{
+    streamDeclarations = @{
+      "Custom-AcessoApsLog" = @{
+        columns = @(
+          @{ name = "TimeGenerated"; type = "datetime" },
+          @{ name = "ExecutionId"; type = "string" },
+          @{ name = "FunctionName"; type = "string" },
+          @{ name = "LogLevel"; type = "string" },
+          @{ name = "Message"; type = "string" },
+          @{ name = "AppName"; type = "string" },
+          @{ name = "AccessCount"; type = "int" },
+          @{ name = "ExecutionTime"; type = "real" },
+          @{ name = "Status"; type = "string" }
+        )
+      }
+    }
+    dataSources = @{
+      logs = @(
+        @{
+          name = "acessoAppsLogSource"
+          streams = @("Custom-AcessoApsLog")
+        }
+      )
+    }
+    destinations = @{
+      logAnalytics = @(
+        @{
+          name = "logAnalyticsWorkspace"
+          workspaceResourceId = (az monitor log-analytics workspace list `
+            --resource-group $resourceGroup `
+            --query "[0].id" -o tsv)
+        }
+      )
+    }
+    dataFlows = @(
+      @{
+        streams = @("Custom-AcessoApsLog")
+        destinations = @("logAnalyticsWorkspace")
+      }
+    )
+  }
+}
+
+$dcrPayload | ConvertTo-Json -Depth 10 | Set-Content "dcr-config.json"
+
+az monitor data-collection rule create `
+  --resource-group $resourceGroup `
+  --name $dcrName `
+  --location $location `
+  --rule-file "dcr-config.json"
+
+Write-Host "✅ DCR criada: $dcrName"
+
+# 9. FAZER DEPLOY
 cd c:\dev\FuncApp\SumarizacaoAcessoApps-Powershell
 func azure functionapp publish $functionAppName --build remote
 
