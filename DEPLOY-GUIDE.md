@@ -201,10 +201,106 @@ Salve este JSON como `dcr-config.json`:
           {
             "name": "ExecutionId",
             "type": "string"
-          },
-          {
-            "name": "FunctionName",
-            "type": "string"
+          ---
+
+          ## 📤 Enviar Dados para a DCR
+
+          Após criar a DCR, sua Function App pode enviar dados usando a API HTTP de ingestão. Aqui está um exemplo para usar no seu código PowerShell:
+
+          ```powershell
+          # Função para enviar logs para DCR
+          function Send-LogsToDCR {
+            param(
+              [string]$ExecutionId,
+              [string]$FunctionName,
+              [string]$LogLevel,
+              [string]$Message,
+              [string]$AppName,
+              [int]$AccessCount,
+              [decimal]$ExecutionTime,
+              [string]$Status
+            )
+    
+            # Obter token via Managed Identity
+            $token = (Invoke-RestMethod `
+              -Uri "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2017-12-01&resource=https://monitor.azure.com" `
+              -Headers @{"Metadata"="true"}).access_token
+    
+            # Preparar o payload
+            $logEntry = @{
+              TimeGenerated = (Get-Date -Format "o")
+              ExecutionId = $ExecutionId
+              FunctionName = $FunctionName
+              LogLevel = $LogLevel
+              Message = $Message
+              AppName = $AppName
+              AccessCount = $AccessCount
+              ExecutionTime = $ExecutionTime
+              Status = $Status
+            }
+    
+            # Headers
+            $headers = @{
+              "Authorization" = "Bearer $token"
+              "Content-Type" = "application/json"
+            }
+    
+            # Endpoint da DCR (você precisa obter isso do seu recurso)
+            $dcrEndpoint = "https://seu-workspace.eastus-1.ingest.monitor.azure.com/dataCollectionRules/dcr-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/streams/Custom-AcessoApsLog?api-version=2023-01-01"
+    
+            try {
+              Invoke-RestMethod `
+                -Uri $dcrEndpoint `
+                -Method Post `
+                -Headers $headers `
+                -Body ($logEntry | ConvertTo-Json)
+        
+              Write-Output "✅ Log enviado com sucesso"
+            }
+            catch {
+              Write-Error "❌ Erro ao enviar log: $_"
+            }
+          }
+
+          # Usar a função dentro da sua Azure Function
+          Send-LogsToDCR `
+            -ExecutionId "exec-12345" `
+            -FunctionName "Diario" `
+            -LogLevel "Info" `
+            -Message "Resumo diário processado" `
+            -AppName "SumarizacaoAcessoApps" `
+            -AccessCount 150 `
+            -ExecutionTime 2.5 `
+            -Status "Success"
+          ```
+
+          ### Obter Endpoint da DCR
+
+          ```powershell
+          # O endpoint está disponível em:
+          $resourceGroup = "seu-resource-group"
+          $dcrName = "SumarizacaoAcessoApps-DCR"
+
+          # Listar todas as ingestões de endpoint
+          az monitor data-collection rule show `
+            --resource-group $resourceGroup `
+            --name $dcrName `
+            --query "properties.dataCollectionEndpoints" -o jsonc
+          ```
+
+          ---
+
+          ## 📖 Documentos Adicionais
+
+          - **[DCR-PAYLOADS.md](DCR-PAYLOADS.md)** - Exemplos completos de payloads DCR para diferentes cenários
+            - Eventos Windows
+            - Logs Customizados
+            - Métricas de Performance
+            - Transformação com KQL
+
+          ---
+
+          ## 📚 Referências
           },
           {
             "name": "LogLevel",

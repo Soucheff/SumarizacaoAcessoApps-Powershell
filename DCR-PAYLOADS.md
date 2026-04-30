@@ -6,6 +6,101 @@ A **Data Collection Rule (DCR)** define como coletar dados de diferentes fontes 
 
 ---
 
+## 🧭 Criar DCE e DCR pelo Portal do Azure
+
+Este fluxo é para criar tudo visualmente no Portal: Data Collection Endpoint (DCE) + Data Collection Rule (DCR) para ingestão de logs customizados.
+
+### Pré-requisitos
+
+- Subscription com permissão de escrita no Resource Group
+- Log Analytics Workspace já criado
+- DCE, DCR e Workspace na mesma região
+- Nome da tabela de destino no Log Analytics (exemplo: `AcessoApsLog_CL`)
+
+### Parte 1: Criar o DCE
+
+1. No Portal do Azure, abra **Monitor**.
+2. Vá em **Settings > Data Collection Endpoints**.
+3. Clique em **Create**.
+4. Preencha:
+  - Subscription
+  - Resource Group
+  - Name (exemplo: `dce-sumarizacaoapps`)
+  - Region (mesma do Workspace)
+5. Clique em **Review + create** e depois **Create**.
+6. Abra o DCE criado e copie:
+  - **Resource ID**
+  - **Logs ingestion endpoint** (URI de ingestão)
+
+### Parte 2: Criar a DCR no Portal
+
+1. Em **Monitor**, vá em **Settings > Data Collection Rules**.
+2. Clique em **Create**.
+3. Na aba **Basics**, preencha:
+  - Rule name (exemplo: `dcr-sumarizacaoapps`)
+  - Subscription
+  - Resource Group
+  - Region (mesma do Workspace)
+  - Data Collection Endpoint: selecione o DCE criado
+4. Em **Resources**:
+  - Para Logs Ingestion API, normalmente não há associação com VM
+  - Pode deixar sem recursos (Resource Count = 0)
+5. Em **Collect and deliver**, adicione a origem de dados de log customizado.
+6. Defina o stream customizado (exemplo: `Custom-AcessoApsLog`) e os campos que o payload vai enviar.
+7. Em **Destination**, escolha **Log Analytics workspace**.
+8. Selecione seu workspace de destino.
+9. Em transformação, use:
+
+```kql
+source
+| project TimeGenerated, ExecutionId, FunctionName, LogLevel, Message, AppName, AccessCount=toint(AccessCount), ExecutionTime=todouble(ExecutionTime), Status
+| extend IsError = (LogLevel == "Error"), IsCritical = (LogLevel == "Critical")
+```
+
+10. Clique em **Review + create** e depois **Create**.
+
+### Parte 3: Coletar IDs e endpoint para usar na aplicação
+
+1. Abra a DCR criada.
+2. Em **Overview**, abra **JSON View**.
+3. Copie:
+  - `immutableId` da DCR
+  - Nome do stream (exemplo: `Custom-AcessoApsLog`)
+4. Guarde também o endpoint de ingestão do DCE.
+
+### Parte 4: Montar a URL de ingestão
+
+Com os dados acima, a URL usada pela Function terá este formato:
+
+```text
+https://<dce-endpoint>/dataCollectionRules/<dcr-immutable-id>/streams/Custom-AcessoApsLog?api-version=2023-01-01
+```
+
+### Parte 5: Validar no Log Analytics
+
+1. Execute sua Function para enviar um log de teste.
+2. Abra o Log Analytics Workspace.
+3. Vá em **Logs** e rode uma consulta na tabela destino, por exemplo:
+
+```kql
+AcessoApsLog_CL
+| take 20
+```
+
+4. Se não aparecer dado, confira:
+  - Região do DCE/DCR/Workspace
+  - Nome do stream da DCR
+  - Schema e tipos dos campos
+  - Permissão da Managed Identity
+
+### Observação importante
+
+- Em cenários novos, o endpoint da própria DCR pode ser usado sem DCE em alguns casos.
+- No Portal, o fluxo ainda pode exigir DCE dependendo da experiência disponível na sua tenant/região.
+- Como você pediu DCE + DCR via Portal, este guia segue o caminho mais compatível com a interface atual.
+
+---
+
 ## 📋 Payload 1: DCR Básica para Eventos Windows
 
 Para coletar eventos do Windows de uma VM e enviar para Log Analytics:
